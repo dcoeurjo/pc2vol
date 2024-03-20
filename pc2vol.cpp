@@ -52,19 +52,20 @@ int main(int argc, char**argv)
   std::vector<Z3i::RealPoint> dnormals;
   
   size_t nbPts= 0;
-  Z3i::RealPoint lower(100,100,100),upper(0,0,0);
+  Z3i::RealPoint lower(std::numeric_limits<double>::max(),std::numeric_limits<double>::max(),std::numeric_limits<double>::max()),
+                  upper(std::numeric_limits<double>::min(),std::numeric_limits<double>::min(),std::numeric_limits<double>::min());
   while (ifs.good()) {
     ifs >>x>>y>>z>>nx>>ny>>nz;
     Z3i::RealPoint p(x,y,z);
     dpoints.push_back(p);
-    dnormals.push_back(Z3i::RealPoint(nx,ny,nz));
+    dnormals.push_back(-Z3i::RealPoint(nx,ny,nz));
     lower = lower.inf(p);
     upper = upper.sup(p);
     if (ifs.good()) ++nbPts;
   }
   ifs.close();
   
-  std::cout<<"Point cloud bbox: "<<lower<<" "<<upper<<std::endl;
+  std::cout<<"Point cloud "<<dpoints.size()<<" points  bbox: "<<lower<<" "<<upper<<std::endl;
   RegularPointEmbedder<Z3i::Space> pointEmbedder;
   pointEmbedder.init( h );
   Z3i::Point lowerPoint = pointEmbedder.floor( lower )- Z3i::Point::diagonal(1);
@@ -93,8 +94,8 @@ int main(int argc, char**argv)
   trace.beginBlock("WindingNumber BVH");
   //Winding number shape
   WindingNumbersShape<Z3i::Space> wnshape(points,normals);
-  Eigen::VectorXd areas = Eigen::VectorXd::Ones(points.rows());
-  //areas = 1.0/(double)points.rows() * areas;
+  //Eigen::VectorXd areas = Eigen::VectorXd::Ones(points.rows());
+  //areas = 0.1 * areas;
   //wnshape.setPointAreas(areas);
   trace.endBlock();
   
