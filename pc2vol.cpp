@@ -76,6 +76,25 @@ int main(int argc, char**argv)
   Z3i::Point upperPoint = pointEmbedder.ceil( upper ) + Z3i::Point::diagonal(1);
   Z3i::Domain domain(lowerPoint,upperPoint);
   trace.info() <<"Digital domain = "<<domain.size()<<" " <<domain<<std::endl;
+
+  auto pc_size_X = upper[0]-lower[0]+1;
+  auto pc_size_Y = upper[1]-lower[1]+1;
+  auto pc_size_Z = upper[2]-lower[2]+1;
+  //DBG std::cout<<pc_size_X<<std::endl;
+  //DBG std::cout<<pc_size_Y<<std::endl;
+  //DBG std::cout<<pc_size_Z<<std::endl;
+  auto vox_lower = domain.lowerBound();
+  auto vox_upper = domain.upperBound();
+  auto vox_size_X = vox_upper[0]-vox_lower[0]+1;
+  auto vox_size_Y = vox_upper[1]-vox_lower[1]+1;
+  auto vox_size_Z = vox_upper[2]-vox_lower[2]+1;
+  //DBG std::cout<<vox_size_X<<std::endl;
+  //DBG std::cout<<vox_size_Y<<std::endl;
+  //DBG std::cout<<vox_size_Z<<std::endl;
+  std::cout<<"pc/voxels X scale factor = "<<pc_size_X/vox_size_X<<std::endl;
+  std::cout<<"pc/voxels Y scale factor = "<<pc_size_Y/vox_size_Y<<std::endl;
+  std::cout<<"pc/voxels Z scale factor = "<<pc_size_Z/vox_size_Z<<std::endl;
+
   if (dryrun)
     exit(0);
   
