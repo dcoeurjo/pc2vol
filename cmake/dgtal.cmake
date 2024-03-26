@@ -11,7 +11,7 @@ SET(BUILD_EXAMPLES OFF)
 FetchContent_Declare(
     DGtal
     GIT_REPOSITORY https://github.com/DGtal-team/DGtal.git
-    GIT_TAG 640fd9e755acd6228f43708f064e96f5e82ca8dc
+    GIT_TAG c3c5b19c561ecfe36756dbfd88dc38a3dd7ecfd2
     )
 FetchContent_MakeAvailable(DGtal)
 

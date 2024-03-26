@@ -34,6 +34,10 @@ int main(int argc, char**argv)
   app.add_option("-i,--input", filename, "Input point cloud (ascii, todo: PLY).") ->required()->check(CLI::ExistingFile);;
   bool dryrun=false;
   app.add_flag("--dry-run", dryrun, "Just load the point cloud, compute the bounding box and output the vol size (no visu).");
+
+  bool flip=false;
+  app.add_flag("--flip-normals", flip, "Flip input normal vectors");
+
   std::string outputVol="output.vol";
   app.add_option("-o,--output", outputVol, "Output VOL (default: output.vol.");
   double h=1.0;
@@ -58,7 +62,7 @@ int main(int argc, char**argv)
     ifs >>x>>y>>z>>nx>>ny>>nz;
     Z3i::RealPoint p(x,y,z);
     dpoints.push_back(p);
-    dnormals.push_back(-Z3i::RealPoint(nx,ny,nz));
+    dnormals.push_back(flip? -Z3i::RealPoint(nx,ny,nz):Z3i::RealPoint(nx,ny,nz));
     lower = lower.inf(p);
     upper = upper.sup(p);
     if (ifs.good()) ++nbPts;
@@ -93,7 +97,7 @@ int main(int argc, char**argv)
   
   trace.beginBlock("WindingNumber BVH");
   //Winding number shape
-  WindingNumbersShape<Z3i::Space> wnshape(points,normals);
+  WindingNumbersShape<Z3i::Space> wnshape(points,normals,true);
   //Eigen::VectorXd areas = Eigen::VectorXd::Ones(points.rows());
   //areas = 0.1 * areas;
   //wnshape.setPointAreas(areas);
