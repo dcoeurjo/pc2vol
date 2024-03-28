@@ -24,67 +24,37 @@ typedef Shortcuts<Z3i::KSpace>         SH3;
 typedef ShortcutsGeometry<Z3i::KSpace> SHG3;
 
 
-int main(int argc, char**argv)
+// Global vars
+Z3i::Point lowerPoint,upperPoint;
+Z3i::Domain *domain;
+Z3i::DigitalSet *voxels;
+
+Z3i::RealPoint lower,upper;
+std::vector<Z3i::RealPoint> dpoints;
+std::vector<Z3i::RealPoint> dnormals;
+size_t nbPts= 0;
+bool dryrun=false;
+float factor=1.0;
+float h=1.0;
+bool skipCGALAreas=true;
+
+void voxelize()
 {
-  CLI::App app{"pc2vol"};
-  
-  bool visu=false;
-  app.add_flag("--visu", visu, "Enable polyscope");
-  std::string filename;
-  app.add_option("-i,--input", filename, "Input point cloud (ascii, todo: PLY).") ->required()->check(CLI::ExistingFile);;
-  bool dryrun=false;
-  app.add_flag("--dry-run", dryrun, "Just load the point cloud, compute the bounding box and output the vol size (no visu).");
-
-  bool flip=false;
-  app.add_flag("--flip-normals", flip, "Flip input normal vectors");
-
-  std::string outputVol="output.vol";
-  app.add_option("-o,--output", outputVol, "Output VOL (default: output.vol.");
-  double h=1.0;
-  app.add_option("--gridstep", h, "Gridstep parameter h (default: 1.0).");
-
-  CLI11_PARSE(app, argc, argv);
-  
-  if (visu)
-    polyscope::init();
-  
-  
-  
-  std::ifstream ifs (filename, std::ifstream::in);
-  double x,y,z,nx,ny,nz;
-  std::vector<Z3i::RealPoint> dpoints;
-  std::vector<Z3i::RealPoint> dnormals;
-  
-  size_t nbPts= 0;
-  Z3i::RealPoint lower(std::numeric_limits<double>::max(),std::numeric_limits<double>::max(),std::numeric_limits<double>::max()),
-                  upper(std::numeric_limits<double>::min(),std::numeric_limits<double>::min(),std::numeric_limits<double>::min());
-  while (ifs.good()) {
-    ifs >>x>>y>>z>>nx>>ny>>nz;
-    Z3i::RealPoint p(x,y,z);
-    dpoints.push_back(p);
-    dnormals.push_back(flip? -Z3i::RealPoint(nx,ny,nz):Z3i::RealPoint(nx,ny,nz));
-    lower = lower.inf(p);
-    upper = upper.sup(p);
-    if (ifs.good()) ++nbPts;
-  }
-  ifs.close();
-  
-  std::cout<<"Point cloud "<<dpoints.size()<<" points  bbox: "<<lower<<" "<<upper<<std::endl;
   RegularPointEmbedder<Z3i::Space> pointEmbedder;
   pointEmbedder.init( h );
-  Z3i::Point lowerPoint = pointEmbedder.floor( lower )- Z3i::Point::diagonal(1);
-  Z3i::Point upperPoint = pointEmbedder.ceil( upper ) + Z3i::Point::diagonal(1);
-  Z3i::Domain domain(lowerPoint,upperPoint);
-  trace.info() <<"Digital domain = "<<domain.size()<<" " <<domain<<std::endl;
-
+  lowerPoint = pointEmbedder.floor( lower )- Z3i::Point::diagonal(1);
+  upperPoint = pointEmbedder.ceil( upper ) + Z3i::Point::diagonal(1);
+  domain = new Z3i::Domain(lowerPoint,upperPoint);
+  trace.info() <<"Digital domain = "<<domain->size()<<" " <<domain<<std::endl;
+  
   auto pc_size_X = upper[0]-lower[0]+1;
   auto pc_size_Y = upper[1]-lower[1]+1;
   auto pc_size_Z = upper[2]-lower[2]+1;
   //DBG std::cout<<pc_size_X<<std::endl;
   //DBG std::cout<<pc_size_Y<<std::endl;
   //DBG std::cout<<pc_size_Z<<std::endl;
-  auto vox_lower = domain.lowerBound();
-  auto vox_upper = domain.upperBound();
+  auto vox_lower = domain->lowerBound();
+  auto vox_upper = domain->upperBound();
   auto vox_size_X = vox_upper[0]-vox_lower[0]+1;
   auto vox_size_Y = vox_upper[1]-vox_lower[1]+1;
   auto vox_size_Z = vox_upper[2]-vox_lower[2]+1;
@@ -94,7 +64,7 @@ int main(int argc, char**argv)
   std::cout<<"pc/voxels X scale factor = "<<pc_size_X/vox_size_X<<std::endl;
   std::cout<<"pc/voxels Y scale factor = "<<pc_size_Y/vox_size_Y<<std::endl;
   std::cout<<"pc/voxels Z scale factor = "<<pc_size_Z/vox_size_Z<<std::endl;
-
+  
   if (dryrun)
     exit(0);
   
@@ -115,19 +85,23 @@ int main(int argc, char**argv)
   pc->addVectorQuantity("normals", normals);
   
   trace.beginBlock("WindingNumber BVH");
+
   //Winding number shape
-  WindingNumbersShape<Z3i::Space> wnshape(points,normals,true);
-  //Eigen::VectorXd areas = Eigen::VectorXd::Ones(points.rows());
-  //areas = 0.1 * areas;
-  //wnshape.setPointAreas(areas);
+  WindingNumbersShape<Z3i::Space> wnshape(points,normals,skipCGALAreas);
+  if (skipCGALAreas)
+  {
+    Eigen::VectorXd areas = Eigen::VectorXd::Ones(points.rows());
+    areas = h * factor * areas;
+    wnshape.setPointAreas(areas);
+  }
   trace.endBlock();
   
-   
+  
   //Winding (batched)
-  size_t size = domain.size();
+  size_t size = domain->size();
   Eigen::MatrixXd queries(size,3);
   auto cpt=0;
-  for(const auto &vox: domain)
+  for(const auto &vox: (*domain))
   {
     Eigen::RowVector3<double> p(vox[0],vox[1],vox[2]);
     p *= h;
@@ -139,53 +113,118 @@ int main(int argc, char**argv)
   auto orientations = wnshape.orientationBatch(queries);
   
   //Binary Predicate
-  Z3i::DigitalSet voxels(domain);
+  voxels = new Z3i::DigitalSet(*domain);
   cpt=0;
-  for(const auto &voxel: domain)
+  for(const auto &voxel: *domain)
   {
     if (orientations[cpt]==INSIDE)
-      voxels.insertNew(voxel);
+      voxels->insertNew(voxel);
     ++cpt;
   }
-  trace.info() <<"Number of voxels = "<<voxels.size()<<std::endl;
+  trace.info() <<"Number of voxels = "<<voxels->size()<<std::endl;
+}
 
+void update()
+{
+  //Digital surface
+  Z3i::KSpace kspace;
+  kspace.init(lowerPoint, upperPoint, true);
+  typedef Z3i::KSpace::SurfelSet SurfelSet;
+  typedef SetOfSurfels< Z3i::KSpace, SurfelSet > MySetOfSurfels;
+  typedef DigitalSurface< MySetOfSurfels > MyDigitalSurface;
+  typedef SurfelAdjacency<Z3i::KSpace::dimension> MySurfelAdjacency;
+  
+  MySurfelAdjacency surfAdj( true ); // interior in all directions.
+  MySetOfSurfels theSetOfSurfels( kspace, surfAdj );
+  Surfaces<Z3i::KSpace>::sMakeBoundary(theSetOfSurfels.surfelSet(),
+                                       kspace,
+                                       *voxels,
+                                       lowerPoint,
+                                       upperPoint);
+  //Polyscope visualization
+  auto surfPtr = CountedPtr<DigitalSurface< MySetOfSurfels >>(new MyDigitalSurface(theSetOfSurfels));
+  auto primalSurfaceReco   = SH3::makePrimalSurfaceMesh(surfPtr);
+  
+  std::vector<Z3i::RealPoint> positionsReco = primalSurfaceReco->positions();
+  //Fixing the embedding
+  std::for_each(std::begin(positionsReco), std::end(positionsReco), [&](Z3i::RealPoint &p){p=p*h;});
+  
+  std::vector<std::vector<SH3::SurfaceMesh::Vertex>> facesReco;
+  for(auto face= 0 ; face < primalSurfaceReco->nbFaces(); ++face)
+    facesReco.push_back(primalSurfaceReco->incidentVertices( face ));
+  auto psMesh = polyscope::registerSurfaceMesh("Reconstruction ", positionsReco, facesReco);
+}
+
+
+void callback()
+{
+  ImGui::SliderFloat("Gridstep", &h, 0.0,10.0);
+  ImGui::SliderFloat("Area scale factor", &factor, 0.0,1.0);
+  if (ImGui::Button("Voxelize"))
+  {
+    voxelize();
+    update();
+  }
+}
+
+int main(int argc, char**argv)
+{
+  CLI::App app{"pc2vol"};
+  
+  bool visu=false;
+  app.add_flag("--visu", visu, "Enable polyscope");
+  std::string filename;
+  app.add_option("-i,--input", filename, "Input point cloud (ascii, todo: PLY).") ->required()->check(CLI::ExistingFile);;
+  app.add_flag("--dry-run", dryrun, "Just load the point cloud, compute the bounding box and output the vol size (no visu).");
+  
+  bool flip=false;
+  app.add_flag("--flip-normals", flip, "Flip input normal vectors");
+  app.add_flag("--skipCGALAreas", skipCGALAreas, "Skip CGAL area estimation (use constant factor instead --factor, default: true)");
+
+  std::string outputVol="output.vol";
+  app.add_option("-o,--output", outputVol, "Output VOL (default: output.vol.");
+  app.add_option("--gridstep", h, "Gridstep parameter h (default: 1.0).");
+  app.add_option("--area-scale-factor", factor, "Area associatd to the samples (relative to the gridstep) (default: 1.0");
+
+  CLI11_PARSE(app, argc, argv);
+  
+  if (visu)
+  {
+    polyscope::init();
+    polyscope::state::userCallback = callback;
+  }
+  
+  std::ifstream ifs (filename, std::ifstream::in);
+  double x,y,z,nx,ny,nz;
+  
+  lower=Z3i::RealPoint(std::numeric_limits<double>::max(),std::numeric_limits<double>::max(),std::numeric_limits<double>::max());
+  upper=Z3i::RealPoint (std::numeric_limits<double>::min(),std::numeric_limits<double>::min(),std::numeric_limits<double>::min());
+  while (ifs.good()) {
+    ifs >>x>>y>>z>>nx>>ny>>nz;
+    Z3i::RealPoint p(x,y,z);
+    dpoints.push_back(p);
+    dnormals.push_back(flip? -Z3i::RealPoint(nx,ny,nz):Z3i::RealPoint(nx,ny,nz));
+    lower = lower.inf(p);
+    upper = upper.sup(p);
+    if (ifs.good()) ++nbPts;
+  }
+  ifs.close();
+  
+  std::cout<<"Point cloud "<<dpoints.size()<<" points  bbox: "<<lower<<" "<<upper<<std::endl;
+  
+  
+  voxelize();
+  
   trace.beginBlock("Exporting");
-  ImageContainerBySTLVector<Z3i::Domain, unsigned char> image(domain);
-  for (const auto &p: voxels)
+  ImageContainerBySTLVector<Z3i::Domain, unsigned char> image(*domain);
+  for (const auto &p: *voxels)
     image.setValue(p, 128);
   VolWriter< ImageContainerBySTLVector<Z3i::Domain, unsigned char> >::exportVol(outputVol, image);
   trace.endBlock();
   
   if (visu)
   {
-    //Digital surface
-    Z3i::KSpace kspace;
-    kspace.init(lowerPoint, upperPoint, true);
-    typedef Z3i::KSpace::SurfelSet SurfelSet;
-    typedef SetOfSurfels< Z3i::KSpace, SurfelSet > MySetOfSurfels;
-    typedef DigitalSurface< MySetOfSurfels > MyDigitalSurface;
-    typedef SurfelAdjacency<Z3i::KSpace::dimension> MySurfelAdjacency;
-    
-    MySurfelAdjacency surfAdj( true ); // interior in all directions.
-    MySetOfSurfels theSetOfSurfels( kspace, surfAdj );
-    Surfaces<Z3i::KSpace>::sMakeBoundary(theSetOfSurfels.surfelSet(),
-                                         kspace,
-                                         voxels,
-                                         lowerPoint,
-                                         upperPoint);
-    //Polyscope visualization
-    auto surfPtr = CountedPtr<DigitalSurface< MySetOfSurfels >>(new MyDigitalSurface(theSetOfSurfels));
-    auto primalSurfaceReco   = SH3::makePrimalSurfaceMesh(surfPtr);
-    
-    std::vector<Z3i::RealPoint> positionsReco = primalSurfaceReco->positions();
-    //Fixing the embedding
-    std::for_each(std::begin(positionsReco), std::end(positionsReco), [&](Z3i::RealPoint &p){p=p*h;});
-    
-    std::vector<std::vector<SH3::SurfaceMesh::Vertex>> facesReco;
-    for(auto face= 0 ; face < primalSurfaceReco->nbFaces(); ++face)
-      facesReco.push_back(primalSurfaceReco->incidentVertices( face ));
-    auto psMesh = polyscope::registerSurfaceMesh("Reconstruction "+std::to_string(h), positionsReco, facesReco);
-    
+    update();
     polyscope::show();
   }
   return EXIT_SUCCESS;
