@@ -1,5 +1,6 @@
 #include<iostream>
 #include <fstream>      // std::ifstream
+#include <unordered_set>
 
 #include <DGtal/base/Common.h>
 #include <DGtal/helpers/StdDefs.h>
@@ -26,12 +27,13 @@ typedef ShortcutsGeometry<Z3i::KSpace> SHG3;
 
 // Global vars
 Z3i::Point lowerPoint,upperPoint;
-Z3i::Domain *domain;
-Z3i::DigitalSet *voxels;
+std::unordered_set<Z3i::Point> voxels;
 
 Z3i::RealPoint lower,upper;
 std::vector<Z3i::RealPoint> dpoints;
 std::vector<Z3i::RealPoint> dnormals;
+Eigen::MatrixXd points;
+Eigen::MatrixXd normals;
 size_t nbPts= 0;
 bool dryrun=false;
 float factor=1.0;
@@ -42,10 +44,11 @@ void voxelize()
 {
   RegularPointEmbedder<Z3i::Space> pointEmbedder;
   pointEmbedder.init( h );
+  
   lowerPoint = pointEmbedder.floor( lower )- Z3i::Point::diagonal(1);
   upperPoint = pointEmbedder.ceil( upper ) + Z3i::Point::diagonal(1);
-  domain = new Z3i::Domain(lowerPoint,upperPoint);
-  trace.info() <<"Digital domain = "<<domain->size()<<" " <<domain<<std::endl;
+  Z3i::Domain domain(lowerPoint,upperPoint);
+  trace.info() <<"Digital domain = "<<domain.size()<<" " <<domain<<std::endl;
   
   auto pc_size_X = upper[0]-lower[0]+1;
   auto pc_size_Y = upper[1]-lower[1]+1;
@@ -53,8 +56,8 @@ void voxelize()
   //DBG std::cout<<pc_size_X<<std::endl;
   //DBG std::cout<<pc_size_Y<<std::endl;
   //DBG std::cout<<pc_size_Z<<std::endl;
-  auto vox_lower = domain->lowerBound();
-  auto vox_upper = domain->upperBound();
+  auto vox_lower = domain.lowerBound();
+  auto vox_upper = domain.upperBound();
   auto vox_size_X = vox_upper[0]-vox_lower[0]+1;
   auto vox_size_Y = vox_upper[1]-vox_lower[1]+1;
   auto vox_size_Z = vox_upper[2]-vox_lower[2]+1;
@@ -68,28 +71,18 @@ void voxelize()
   if (dryrun)
     exit(0);
   
-  Eigen::MatrixXd points(nbPts,3);
-  Eigen::MatrixXd normals(nbPts,3);
-  for(auto i=0; i < nbPts;++i)
-  {
-    auto p = dpoints[i];
-    auto n = dnormals[i];
-    points(i,0) = p(0);
-    points(i,1) = p(1);
-    points(i,2) = p(2);
-    normals(i,0) = n(0);
-    normals(i,1) = n(1);
-    normals(i,2) = n(2);
-  }
-  auto pc= polyscope::registerPointCloud("input boundary points", points);
-  pc->addVectorQuantity("normals", normals);
-  
+  double mindist=10000000.0;
+  for(auto i=0; i < dpoints.size(); ++i)
+    for(auto j=i+1; j < dpoints.size(); ++j)
+      mindist = std::min(mindist, (dpoints[i]-dpoints[j]).norm());
+  std::cout<< "Mindist = "<<mindist<<std::endl;
+     
   trace.beginBlock("WindingNumber BVH");
-
   //Winding number shape
   WindingNumbersShape<Z3i::Space> wnshape(points,normals,skipCGALAreas);
   if (skipCGALAreas)
   {
+    trace.info()<<"Skipping CGAL Areas"<<std::endl;
     Eigen::VectorXd areas = Eigen::VectorXd::Ones(points.rows());
     areas = h * factor * areas;
     wnshape.setPointAreas(areas);
@@ -98,10 +91,10 @@ void voxelize()
   
   
   //Winding (batched)
-  size_t size = domain->size();
+  size_t size = domain.size();
   Eigen::MatrixXd queries(size,3);
   auto cpt=0;
-  for(const auto &vox: (*domain))
+  for(const auto &vox: (domain))
   {
     Eigen::RowVector3<double> p(vox[0],vox[1],vox[2]);
     p *= h;
@@ -113,15 +106,15 @@ void voxelize()
   auto orientations = wnshape.orientationBatch(queries);
   
   //Binary Predicate
-  voxels = new Z3i::DigitalSet(*domain);
+  voxels.clear();
   cpt=0;
-  for(const auto &voxel: *domain)
+  for(const auto &voxel: domain)
   {
     if (orientations[cpt]==INSIDE)
-      voxels->insertNew(voxel);
+      voxels.insert(voxel);
     ++cpt;
   }
-  trace.info() <<"Number of voxels = "<<voxels->size()<<std::endl;
+  trace.info() <<"Number of voxels = "<<voxels.size()<<std::endl;
 }
 
 void update()
@@ -136,9 +129,14 @@ void update()
   
   MySurfelAdjacency surfAdj( true ); // interior in all directions.
   MySetOfSurfels theSetOfSurfels( kspace, surfAdj );
+  
+  Z3i::DigitalSet tmpVoxels(Z3i::Domain(lowerPoint,upperPoint));
+  for(const auto &v: voxels)
+    tmpVoxels.insertNew(v);
+  
   Surfaces<Z3i::KSpace>::sMakeBoundary(theSetOfSurfels.surfelSet(),
                                        kspace,
-                                       *voxels,
+                                       tmpVoxels,
                                        lowerPoint,
                                        upperPoint);
   //Polyscope visualization
@@ -202,6 +200,14 @@ int main(int argc, char**argv)
   while (ifs.good()) {
     ifs >>x>>y>>z>>nx>>ny>>nz;
     Z3i::RealPoint p(x,y,z);
+    
+    //Removing duplicates
+    double mindist=std::numeric_limits<double>::max();
+    for(auto i=0; i < dpoints.size(); ++i)
+        mindist = std::min(mindist, (dpoints[i]-p).norm());
+    if (mindist < 0.00001)
+      continue;
+    
     dpoints.push_back(p);
     dnormals.push_back(flip? -Z3i::RealPoint(nx,ny,nz):Z3i::RealPoint(nx,ny,nz));
     lower = lower.inf(p);
@@ -212,19 +218,37 @@ int main(int argc, char**argv)
   
   std::cout<<"Point cloud "<<dpoints.size()<<" points  bbox: "<<lower<<" "<<upper<<std::endl;
   
-  
-  voxelize();
-  
-  trace.beginBlock("Exporting");
-  ImageContainerBySTLVector<Z3i::Domain, unsigned char> image(*domain);
-  for (const auto &p: *voxels)
-    image.setValue(p, 128);
-  VolWriter< ImageContainerBySTLVector<Z3i::Domain, unsigned char> >::exportVol(outputVol, image);
-  trace.endBlock();
-  
-  if (visu)
+  points = Eigen::MatrixXd(nbPts,3);
+  normals = Eigen::MatrixXd (nbPts,3);
+  for(auto i=0; i < nbPts;++i)
   {
-    update();
+    auto p = dpoints[i];
+    auto n = dnormals[i];
+    points(i,0) = p(0);
+    points(i,1) = p(1);
+    points(i,2) = p(2);
+    normals(i,0) = n(0);
+    normals(i,1) = n(1);
+    normals(i,2) = n(2);
+  }
+  
+  if (!visu)
+  {
+    voxelize();
+    
+    trace.beginBlock("Exporting");
+    ImageContainerBySTLVector<Z3i::Domain, unsigned char> image(Z3i::Domain(lowerPoint,upperPoint));
+    for (const auto &p: voxels)
+      image.setValue(p, 128);
+    VolWriter< ImageContainerBySTLVector<Z3i::Domain, unsigned char> >::exportVol(outputVol, image);
+    trace.endBlock();
+  }
+  else
+  {
+    
+    auto pc= polyscope::registerPointCloud("input boundary points", points);
+    pc->addVectorQuantity("normals", normals);
+    
     polyscope::show();
   }
   return EXIT_SUCCESS;
